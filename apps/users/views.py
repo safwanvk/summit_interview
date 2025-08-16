@@ -1,7 +1,8 @@
-from rest_framework import viewsets, status, permissions
+from rest_framework import viewsets, permissions, status, filters as drf_filters
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from django.contrib.auth import get_user_model
+from django.core.exceptions import ValidationError
 from django.db.models import Q
 from django_filters import rest_framework as filters
 
@@ -11,18 +12,15 @@ User = get_user_model()
 
 
 class UserFilter(filters.FilterSet):
-    """
-    Filter for User model.
-    """
     search = filters.CharFilter(method='search_filter')
     is_active = filters.BooleanFilter()
     is_customer = filters.BooleanFilter()
     is_vendor = filters.BooleanFilter()
-    
+
     class Meta:
         model = User
         fields = ['search', 'is_active', 'is_customer', 'is_vendor']
-    
+
     def search_filter(self, queryset, name, value):
         return queryset.filter(
             Q(username__icontains=value) |
@@ -33,75 +31,48 @@ class UserFilter(filters.FilterSet):
 
 
 class UserViewSet(viewsets.ModelViewSet):
-    """
-    ViewSet for User model.
-    """
     queryset = User.objects.all()
     serializer_class = UserSerializer
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = (permissions.IsAuthenticated,)
     filterset_class = UserFilter
+    filter_backends = (filters.DjangoFilterBackend, drf_filters.SearchFilter, drf_filters.OrderingFilter)
     search_fields = ['username', 'email', 'first_name', 'last_name']
     ordering_fields = ['username', 'email', 'created_at', 'updated_at']
     ordering = ['-created_at']
-    
+
     def get_serializer_class(self):
         if self.action == 'list':
             return UserListSerializer
         elif self.action == 'create':
             return UserCreateSerializer
         return UserSerializer
-    
+
     def get_permissions(self):
-        if self.action in ['create', 'update', 'partial_update', 'destroy']:
+        if self.action in ['create', 'update', 'partial_update', 'destroy', 'toggle_status']:
             return [permissions.IsAdminUser()]
-        return super().get_permissions()
-    
-    def get_queryset(self):
-        queryset = super().get_queryset()
-        if self.action == 'list':
-            return queryset
-        return queryset
-    
+        return [permission() for permission in self.permission_classes]
+
     def create(self, request, *args, **kwargs):
         try:
             return super().create(request, *args, **kwargs)
-        except Exception as e:
-            return Response(
-                {'error': str(e)},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-    
-    def update(self, request, *args, **kwargs):
-        instance = self.get_object()
-        serializer = self.get_serializer(instance, data=request.data, partial=True)
-        
-        if serializer.is_valid():
-            serializer.save()
-            return Response(serializer.data)
-        
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-    
+        except ValidationError as e:
+            return Response({'error': e.message_dict}, status=status.HTTP_400_BAD_REQUEST)
+        except Exception:
+            return Response({'error': 'Something went wrong while creating user.'},
+                            status=status.HTTP_400_BAD_REQUEST)
+
     @action(detail=False, methods=['get'])
     def active_users(self, request):
-        """
-        Get all active users.
-        """
-        users = User.objects.all()
-        active_users = [user for user in users if user.is_active]
-        
+        active_users = User.objects.filter(is_active=True)
         serializer = UserListSerializer(active_users, many=True)
         return Response(serializer.data)
-    
+
     @action(detail=False, methods=['get'])
     def user_stats(self, request):
-        """
-        Get user statistics.
-        """
         total_users = User.objects.count()
         active_users = User.objects.filter(is_active=True).count()
         customers = User.objects.filter(is_customer=True).count()
         vendors = User.objects.filter(is_vendor=True).count()
-        
         return Response({
             'total_users': total_users,
             'active_users': active_users,
@@ -109,23 +80,22 @@ class UserViewSet(viewsets.ModelViewSet):
             'vendors': vendors,
             'inactive_users': total_users - active_users
         })
-    
-    @action(detail=True, methods=['post'])
+
+    @action(detail=True, methods=['post'], permission_classes=[permissions.IsAdminUser])
     def toggle_status(self, request, pk=None):
-        """
-        Toggle user active status.
-        """
         user = self.get_object()
         user.is_active = not user.is_active
         user.save()
-        
-        return Response({'status': 'success'})
-    
+        return Response({'status': 'success', 'is_active': user.is_active})
+
     @action(detail=False, methods=['get'])
     def customers(self, request):
-        """
-        Get all customers.
-        """
         customers = User.objects.filter(is_customer=True)
         serializer = UserListSerializer(customers, many=True)
+        return Response(serializer.data)
+
+    @action(detail=False, methods=['get'])
+    def vendors(self, request):
+        vendors = User.objects.filter(is_vendor=True)
+        serializer = UserListSerializer(vendors, many=True)
         return Response(serializer.data)

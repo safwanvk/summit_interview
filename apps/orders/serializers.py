@@ -7,8 +7,10 @@ class OrderItemSerializer(serializers.ModelSerializer):
     Serializer for OrderItem model.
     """
     product_name = serializers.CharField(source='product.name', read_only=True)
-    product_price = serializers.DecimalField(source='product.price', max_digits=10, decimal_places=2, read_only=True)
-    
+    product_price = serializers.DecimalField(
+        source='product.price', max_digits=10, decimal_places=2, read_only=True
+    )
+
     class Meta:
         model = OrderItem
         fields = [
@@ -16,8 +18,6 @@ class OrderItemSerializer(serializers.ModelSerializer):
             'quantity', 'unit_price', 'total_price', 'created_at'
         ]
         read_only_fields = ['id', 'created_at', 'total_price']
-    
-
 
 
 class OrderStatusSerializer(serializers.ModelSerializer):
@@ -26,14 +26,14 @@ class OrderStatusSerializer(serializers.ModelSerializer):
     """
     status_display = serializers.CharField(source='get_status_display', read_only=True)
     created_by_name = serializers.CharField(source='created_by.get_full_name', read_only=True)
-    
+
     class Meta:
         model = OrderStatus
         fields = [
             'id', 'order', 'status', 'status_display', 'notes',
             'created_at', 'created_by', 'created_by_name'
         ]
-        read_only_fields = ['id', 'created_at', 'created_by']
+        read_only_fields = ['id', 'created_at', 'created_by', 'created_by_name']
 
 
 class ShippingAddressSerializer(serializers.ModelSerializer):
@@ -44,33 +44,33 @@ class ShippingAddressSerializer(serializers.ModelSerializer):
         model = ShippingAddress
         fields = [
             'id', 'user', 'address_line1', 'address_line2', 'city',
-            'state', 'postal_code', 'country', 'phone', 'is_default', 'created_at'
+            'state', 'postal_code', 'country', 'phone',
+            'is_default', 'created_at'
         ]
         read_only_fields = ['id', 'created_at']
-    
-
 
 
 class OrderSerializer(serializers.ModelSerializer):
     """
-    Serializer for Order model.
+    Full serializer for Order model.
     """
     customer_name = serializers.CharField(source='customer.get_full_name', read_only=True)
     status_display = serializers.CharField(source='get_status_display', read_only=True)
     items = OrderItemSerializer(many=True, read_only=True)
     status_history = OrderStatusSerializer(many=True, read_only=True)
-    
+
     class Meta:
         model = Order
         fields = [
-            'id', 'order_number', 'customer', 'customer_name', 'status', 'status_display',
-            'shipping_address', 'billing_address', 'subtotal', 'tax_amount',
-            'shipping_cost', 'total_amount', 'notes', 'created_at', 'updated_at',
+            'id', 'order_number', 'customer', 'customer_name',
+            'status', 'status_display',
+            'shipping_address', 'billing_address',
+            'subtotal', 'tax_amount', 'shipping_cost',
+            'total_amount', 'notes',
+            'created_at', 'updated_at',
             'items', 'status_history'
         ]
-        read_only_fields = ['id', 'order_number', 'created_at', 'updated_at']
-    
-
+        read_only_fields = ['id', 'order_number', 'created_at', 'updated_at', 'total_amount']
 
 
 class OrderListSerializer(serializers.ModelSerializer):
@@ -79,34 +79,42 @@ class OrderListSerializer(serializers.ModelSerializer):
     """
     customer_name = serializers.CharField(source='customer.get_full_name', read_only=True)
     status_display = serializers.CharField(source='get_status_display', read_only=True)
-    items_count = serializers.SerializerMethodField()
-    
+    items_count = serializers.IntegerField(source='items.count', read_only=True)
+
     class Meta:
         model = Order
         fields = [
-            'id', 'order_number', 'customer_name', 'status', 'status_display',
+            'id', 'order_number', 'customer_name',
+            'status', 'status_display',
             'total_amount', 'created_at', 'items_count'
         ]
         read_only_fields = ['id', 'order_number', 'created_at', 'items_count']
-    
-    def get_items_count(self, obj):
-        return obj.items.count()
 
 
 class OrderCreateSerializer(serializers.ModelSerializer):
     """
-    Serializer for order creation.
+    Serializer for creating an Order with nested items.
     """
     items = OrderItemSerializer(many=True)
-    
+
     class Meta:
         model = Order
         fields = [
             'customer', 'shipping_address', 'billing_address',
             'subtotal', 'tax_amount', 'shipping_cost', 'notes', 'items'
         ]
-    
 
+    def create(self, validated_data):
+        items_data = validated_data.pop('items', [])
+        order = Order.objects.create(**validated_data)
+
+        for item_data in items_data:
+            OrderItem.objects.create(order=order, **item_data)
+
+        # ensure total_amount is recalculated after items are added
+        order.total_amount = order.subtotal + order.tax_amount + order.shipping_cost
+        order.save()
+        return order
 
 
 class OrderUpdateStatusSerializer(serializers.ModelSerializer):
@@ -116,5 +124,3 @@ class OrderUpdateStatusSerializer(serializers.ModelSerializer):
     class Meta:
         model = Order
         fields = ['status', 'notes']
-    
-
